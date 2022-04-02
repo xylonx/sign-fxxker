@@ -87,23 +87,17 @@ func (c *ChaoXingCourse) StartAutoSign() <-chan string {
 	go func() {
 		for {
 			time.Sleep(c.interval)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
-			alist, err := c.getActiveList(ctx, c.courseID, c.classID)
+			alist, err := c.getActiveList(context.Background(), c.courseID, c.classID)
 			if err != nil {
-				cancel()
 				continue
 			}
-			cancel()
 
 			if len(alist) != 0 {
 				for _, active := range alist {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-					if err := c.autoSign(ctx, active); err != nil {
-						cancel()
+					if err := c.autoSign(context.Background(), active); err != nil {
 						ch <- fmt.Sprintf("%s 课程[%s]签到[%s]失败\n", time.Now(), c.CourseName, active.SignName)
 						continue
 					}
-					cancel()
 					ch <- fmt.Sprintf("%s 课程[%s]签到[%s]成功\n", time.Now(), c.CourseName, active.SignName)
 				}
 			}
