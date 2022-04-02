@@ -27,8 +27,10 @@ type Setting struct {
 			BotToken string `mapstructure:"bot_token" json:"bot_token" yaml:"bot_token" `
 		} `mapstructure:"telegram" json:"telegram" yaml:"telegram" `
 	} `mapstructure:"reporter" json:"reporter" yaml:"reporter" `
-	Users []struct {
-		Alias  string `mapstructure:"alias" json:"alias" yaml:"alias" `
-		Cookie string `mapstructure:"cookie" json:"cookie" yaml:"cookie" `
+	Users struct {
+		Chaoxing []struct {
+			Alias  string `mapstructure:"alias" json:"alias" yaml:"alias" `
+			Cookie string `mapstructure:"cookie" json:"cookie" yaml:"cookie" `
+		} `mapstructure:"chaoxing" json:"chaoxing" yaml:"chaoxing" `
 	} `mapstructure:"users" json:"users" yaml:"users" `
 }

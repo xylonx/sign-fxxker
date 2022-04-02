@@ -9,11 +9,10 @@ import (
 )
 
 func StartAutoSignIn() (err error) {
-	alias2user := make(map[string]*user.User)
-	for _, u := range config.Config.Users {
-		alias2user[u.Alias] = user.NewUser(u.Cookie, u.Alias)
+	alias2user := make(map[string]user.User)
+	for _, u := range config.Config.Users.Chaoxing {
+		alias2user[u.Alias] = user.NewChaoXingUser(u.Cookie, u.Alias)
 	}
-
 	alias2baiduLocation := make(map[string]course.BaiduLocation)
 	for _, l := range config.Config.Location {
 		alias2baiduLocation[l.Alias] = course.BaiduLocation{
@@ -23,30 +22,35 @@ func StartAutoSignIn() (err error) {
 		}
 	}
 
-	chaoxingCourse := make(map[string]*course.ChaoXingCourse, len(config.Config.Course.Chaoxing))
+	chaoxingCourse := []*course.ChaoXingCourse{}
 	for _, c := range config.Config.Course.Chaoxing {
-		courseUsers := make([]*user.User, len(c.Users))
-		for i := range courseUsers {
-			courseUsers[i] = alias2user[c.Users[i]]
+		if _, ok := alias2baiduLocation[c.Location]; !ok {
+			return fmt.Errorf("location %s is not in location list. please add user first\n", c.Location)
 		}
-		chaoxingCourse[c.Alias], err = course.NewChaoXingCourse(&course.ChaoXingCourseOptions{
-			Users:           courseUsers,
-			Location:        alias2baiduLocation[c.Location],
-			IntervalSeconds: config.Config.Course.IntervalSeconds,
-			DelaySeconds:    config.Config.Course.DelaySeconds,
-			CourseID:        c.CourseId,
-			ClassID:         c.ClassId,
-		})
-		if err != nil {
-			return err
+		for _, u := range c.Users {
+			// check user validation
+			if _, ok := alias2user[u]; !ok {
+				return fmt.Errorf("user %s is not in user list. please add user first\n", u)
+			}
+			chaoxingCourse = append(chaoxingCourse, course.NewChaoXingCourse(&course.ChaoXingCourseOptions{
+				CourseName:      c.Alias,
+				User:            alias2user[u],
+				Location:        alias2baiduLocation[c.Location],
+				IntervalSeconds: config.Config.Course.IntervalSeconds,
+				DelaySeconds:    config.Config.Course.DelaySeconds,
+				CourseID:        c.CourseId,
+				ClassID:         c.ClassId,
+			}))
 		}
 	}
 
+	// auto sign chaoxing course
 	for _, c := range chaoxingCourse {
 		status := c.StartAutoSign()
-		go func(<-chan course.SignStatus) {
+		go func(<-chan string) {
 			for s := range status {
-				fmt.Printf("Dear %s:\n课程 %s 签到状态: %v\n附加信息: %s", s.User.GetUserName(), s.CourseName, s.Success, s.Message)
+				fmt.Println(s)
+				// TODO: reporter by reporter sub-module
 			}
 		}(status)
 	}
