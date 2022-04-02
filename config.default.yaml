@@ -1,0 +1,32 @@
+users:
+  chaoxing:
+    - alias: xylonx-chaoxing
+      cookie:
+
+location:
+  - alias:
+    baidu_map_addr_name:
+    baidu_map_longitude:
+    baidu_map_latitude:
+  - alias:
+    baidu_map_addr_name:
+    baidu_map_longitude:
+    baidu_map_latitude:
+
+course:
+  interval_seconds: 60
+  delay_seconds: 10
+  chaoxing:
+    - alias:
+      class_id:
+      course_id:
+      location:
+      users:
+        - xylonx-chaoxing
+
+reporter:
+  mail:
+    server:
+    token:
+  telegram:
+    bot_token:
