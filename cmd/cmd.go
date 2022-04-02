@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/xylonx/sign-fxxker/internal/config"
+	"github.com/xylonx/sign-fxxker/internal/core"
 	"github.com/xylonx/sign-fxxker/internal/service"
 )
 
@@ -16,6 +17,10 @@ var rootCmd = &cobra.Command{
 	Short: "sign in the fxxking chaoxing, teachermate etc.",
 	PreRunE: func(cmd *cobra.Command, args []string) (err error) {
 		err = config.Setup(cfgFile)
+		if err != nil {
+			return err
+		}
+		err = core.Setup()
 		if err != nil {
 			return err
 		}
