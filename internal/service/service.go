@@ -1,51 +1,38 @@
 package service
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/xylonx/sign-fxxker/internal/config"
-	"github.com/xylonx/sign-fxxker/internal/course"
-	"github.com/xylonx/sign-fxxker/internal/user"
+	"github.com/xylonx/sign-fxxker/internal/core"
+	"github.com/xylonx/sign-fxxker/internal/router"
+	"github.com/xylonx/zapx"
+	"go.uber.org/zap"
 )
 
-func StartAutoSignIn() (err error) {
-	alias2user := make(map[string]user.User)
-	for _, u := range config.Config.Users.Chaoxing {
-		alias2user[u.Alias] = user.NewChaoXingUser(u.Cookie, u.Alias)
-	}
-	alias2baiduLocation := make(map[string]course.BaiduLocation)
-	for _, l := range config.Config.Location {
-		alias2baiduLocation[l.Alias] = course.BaiduLocation{
-			Addr:      l.BaiduMapAddrName,
-			Longitude: l.BaiduMapLongitude,
-			Latitude:  l.BaiduMapLatitude,
-		}
-	}
+var httpServer *http.Server
 
-	chaoxingCourse := []*course.ChaoXingCourse{}
-	for _, c := range config.Config.Course.Chaoxing {
-		if _, ok := alias2baiduLocation[c.Location]; !ok {
-			return fmt.Errorf("location %s is not in location list. please add user first\n", c.Location)
+func StartService() (err error) {
+	httpAddr := fmt.Sprintf("%v:%v", config.Config.Http.Host, config.Config.Http.Port)
+	httpServer = router.NewHttpServer(&router.HttpOption{
+		Addr:         httpAddr,
+		ReadTimeout:  time.Second * time.Duration(config.Config.Http.ReadTimeoutSeconds),
+		WriteTimeout: time.Second * time.Duration(config.Config.Http.WriteTimeoutSeconds),
+		AllowOrigins: config.Config.Http.AllowOrigins,
+	})
+
+	go func() {
+		zapx.Info("start http server", zap.String("host", httpAddr))
+		if err := httpServer.ListenAndServe(); err != nil {
+			zapx.Error("http run error", zap.Error(err))
 		}
-		for _, u := range c.Users {
-			// check user validation
-			if _, ok := alias2user[u]; !ok {
-				return fmt.Errorf("user %s is not in user list. please add user first\n", u)
-			}
-			chaoxingCourse = append(chaoxingCourse, course.NewChaoXingCourse(&course.ChaoXingCourseOptions{
-				CourseName:      c.Alias,
-				User:            alias2user[u],
-				Location:        alias2baiduLocation[c.Location],
-				IntervalSeconds: config.Config.Course.IntervalSeconds,
-				DelaySeconds:    config.Config.Course.DelaySeconds,
-				CourseID:        c.CourseId,
-				ClassID:         c.ClassId,
-			}))
-		}
-	}
+	}()
 
 	// auto sign chaoxing course
-	for _, c := range chaoxingCourse {
+	for _, c := range core.ChaoxingCourse {
 		status := c.StartAutoSign()
 		go func(<-chan string) {
 			for s := range status {
@@ -56,4 +43,8 @@ func StartAutoSignIn() (err error) {
 	}
 
 	return nil
+}
+
+func StopService(ctx context.Context) {
+	httpServer.Shutdown(ctx)
 }

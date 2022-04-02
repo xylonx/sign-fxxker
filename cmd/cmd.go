@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,7 +22,7 @@ var rootCmd = &cobra.Command{
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) (err error) {
-		err = service.StartAutoSignIn()
+		err = service.StartService()
 		if err != nil {
 			return err
 		}
@@ -30,6 +31,8 @@ var rootCmd = &cobra.Command{
 		signal.Notify(sig, syscall.SIGTERM)
 
 		<-sig
+
+		service.StopService(context.Background())
 		return nil
 	},
 }

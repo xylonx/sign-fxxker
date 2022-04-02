@@ -16,6 +16,13 @@ type Setting struct {
 		DelaySeconds    int64 `mapstructure:"delay_seconds" json:"delay_seconds" yaml:"delay_seconds" `
 		IntervalSeconds int64 `mapstructure:"interval_seconds" json:"interval_seconds" yaml:"interval_seconds" `
 	} `mapstructure:"course" json:"course" yaml:"course" `
+	Http struct {
+		AllowOrigins        []string `mapstructure:"allow_origins" json:"allow_origins" yaml:"allow_origins" `
+		Host                string   `mapstructure:"host" json:"host" yaml:"host" `
+		Port                int64    `mapstructure:"port" json:"port" yaml:"port" `
+		ReadTimeoutSeconds  int64    `mapstructure:"read_timeout_seconds" json:"read_timeout_seconds" yaml:"read_timeout_seconds" `
+		WriteTimeoutSeconds int64    `mapstructure:"write_timeout_seconds" json:"write_timeout_seconds" yaml:"write_timeout_seconds" `
+	} `mapstructure:"http" json:"http" yaml:"http" `
 	Location []struct {
 		Alias             string  `mapstructure:"alias" json:"alias" yaml:"alias" `
 		BaiduMapAddrName  string  `mapstructure:"baidu_map_addr_name" json:"baidu_map_addr_name" yaml:"baidu_map_addr_name" `
