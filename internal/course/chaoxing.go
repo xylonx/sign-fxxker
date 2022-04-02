@@ -45,7 +45,7 @@ type BaiduLocation struct {
 }
 
 type ChaoXingCourse struct {
-	courseName string
+	CourseName string
 	user       user.User
 	location   BaiduLocation
 	interval   time.Duration
@@ -71,7 +71,7 @@ type ChaoXingCourseOptions struct {
 
 func NewChaoXingCourse(opt *ChaoXingCourseOptions) *ChaoXingCourse {
 	return &ChaoXingCourse{
-		courseName: opt.CourseName,
+		CourseName: opt.CourseName,
 		user:       opt.User,
 		location:   opt.Location,
 		interval:   time.Duration(opt.IntervalSeconds) * time.Second,
@@ -100,11 +100,11 @@ func (c *ChaoXingCourse) StartAutoSign() <-chan string {
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 					if err := c.autoSign(ctx, active); err != nil {
 						cancel()
-						ch <- fmt.Sprintf("%s 课程[%s]签到[%s]失败\n", time.Now(), c.courseName, active.SignName)
+						ch <- fmt.Sprintf("%s 课程[%s]签到[%s]失败\n", time.Now(), c.CourseName, active.SignName)
 						continue
 					}
 					cancel()
-					ch <- fmt.Sprintf("%s 课程[%s]签到[%s]成功\n", time.Now(), c.courseName, active.SignName)
+					ch <- fmt.Sprintf("%s 课程[%s]签到[%s]成功\n", time.Now(), c.CourseName, active.SignName)
 				}
 			}
 
