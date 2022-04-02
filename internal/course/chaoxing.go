@@ -23,17 +23,19 @@ const (
 	QrCodeSign   = "二维码签到"
 )
 
-type ActiveList struct {
+type ActiveListResp struct {
 	Result int `json:"result"`
 	Data   struct {
-		ActiveList []struct {
-			SignName  string `json:"nameOne"`
-			AttendNum int    `json:"attendNum"`
-			StartTime int64  `json:"startTime"`
-			EndTime   int64  `json:"endTime"`
-			ActiveID  int64  `json:"id"`
-		}
+		ActiveList []ActiveList `json:"activeList"`
 	} `json:"data"`
+}
+
+type ActiveList struct {
+	SignName  string `json:"nameOne"`
+	AttendNum int    `json:"attendNum"`
+	StartTime int64  `json:"startTime"`
+	EndTime   int64  `json:"endTime"`
+	ActiveID  int64  `json:"id"`
 }
 
 type BaiduLocation struct {
@@ -44,7 +46,7 @@ type BaiduLocation struct {
 
 type ChaoXingCourse struct {
 	courseName string
-	users      []*user.User
+	user       user.User
 	location   BaiduLocation
 	interval   time.Duration
 	delay      time.Duration
@@ -52,14 +54,14 @@ type ChaoXingCourse struct {
 	courseID int64
 	classID  int64
 
-	mux            *sync.RWMutex
+	mux            sync.RWMutex
 	qrCodeEnc      string
 	qrCodeUpdateAt time.Time
 }
 
 type ChaoXingCourseOptions struct {
 	CourseName      string
-	Users           []*user.User
+	User            user.User
 	Location        BaiduLocation
 	IntervalSeconds int64
 	DelaySeconds    int64
@@ -67,24 +69,199 @@ type ChaoXingCourseOptions struct {
 	ClassID         int64
 }
 
-func NewChaoXingCourse(opt *ChaoXingCourseOptions) (*ChaoXingCourse, error) {
-	if opt == nil {
-		return nil, errors.New("no option specified")
-	}
-	if len(opt.Users) == 0 {
-		return nil, errors.New("no users specified")
-	}
+func NewChaoXingCourse(opt *ChaoXingCourseOptions) *ChaoXingCourse {
 	return &ChaoXingCourse{
 		courseName: opt.CourseName,
-		users:      opt.Users,
+		user:       opt.User,
 		location:   opt.Location,
 		interval:   time.Duration(opt.IntervalSeconds) * time.Second,
 		delay:      time.Duration(opt.DelaySeconds) * time.Second,
 		courseID:   opt.CourseID,
 		classID:    opt.ClassID,
-		mux:        &sync.RWMutex{},
-	}, nil
+		mux:        sync.RWMutex{},
+	}
 }
+
+func (c *ChaoXingCourse) StartAutoSign() <-chan string {
+	ch := make(chan string, 2)
+	go func() {
+		for {
+			time.Sleep(c.interval)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
+			alist, err := c.getActiveList(ctx, c.courseID, c.classID)
+			if err != nil {
+				cancel()
+				continue
+			}
+			cancel()
+
+			if len(alist) != 0 {
+				for _, active := range alist {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+					if err := c.autoSign(ctx, active); err != nil {
+						cancel()
+						ch <- fmt.Sprintf("%s 课程[%s]签到[%s]失败\n", time.Now(), c.courseName, active.SignName)
+						continue
+					}
+					cancel()
+					ch <- fmt.Sprintf("%s 课程[%s]签到[%s]成功\n", time.Now(), c.courseName, active.SignName)
+				}
+			}
+
+		}
+	}()
+	return ch
+}
+
+func (c *ChaoXingCourse) autoSign(ctx context.Context, sign ActiveList) error {
+	if time.UnixMilli(sign.EndTime).Sub(time.Now()) > c.delay*3 {
+		time.Sleep(c.delay)
+	}
+	switch sign.SignName {
+	case GeneralSign:
+		return c.generalSign(ctx, sign.ActiveID)
+	case LocationSign:
+		return c.locationSign(ctx, c.location.Addr, sign.ActiveID, c.location.Longitude, c.location.Latitude)
+	case QrCodeSign:
+		enc, updatedAt := c.getQrCode()
+		if updatedAt.UnixMilli() < sign.StartTime {
+			return nil
+		}
+		return c.qrCodeSign(ctx, enc, sign.ActiveID)
+	default:
+		return fmt.Errorf("sign type[%v] is not supported now", sign.SignName)
+	}
+}
+
+// getActiveList - return the un signed activity list
+func (c *ChaoXingCourse) getActiveList(ctx context.Context, courseID, classID int64) ([]ActiveList, error) {
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, fmt.Sprintf(`https://mobilelearn.chaoxing.com/v2/apis/active/student/activelist?fid=0&courseId=%d&classId=%d&_=%d`, courseID, classID, time.Now().UnixMilli()),
+		nil,
+	)
+	if err != nil {
+		zapx.Error("generate get activeList request failed", zap.Error(err))
+		return nil, err
+	}
+	c.user.SetCredentials(req)
+	req.Header.Add("User-Agent", constant.UA)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		zapx.Error("get activeList failed", zap.Error(err))
+		return nil, err
+	}
+
+	alistResp := new(ActiveListResp)
+	if err := json.NewDecoder(resp.Body).Decode(alistResp); err != nil {
+		zapx.Error("decode activeList failed", zap.Error(err))
+		return nil, err
+	}
+
+	alist := make([]ActiveList, 0, len(alistResp.Data.ActiveList))
+	for _, a := range alistResp.Data.ActiveList {
+		if time.UnixMilli(a.EndTime).After(time.Now()) {
+			if succ, _ := c.checkUnsigned(ctx, a.ActiveID); succ {
+				alist = append(alist, a)
+			}
+		}
+	}
+
+	return alist, nil
+}
+
+func (c *ChaoXingCourse) checkUnsigned(ctx context.Context, activeID int64) (bool, error) {
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, fmt.Sprintf(`https://mobilelearn.chaoxing.com/v2/apis/sign/getAttendInfo?activeId=%v`, activeID), nil)
+	if err != nil {
+		return false, err
+	}
+	c.user.SetCredentials(req)
+	req.Header.Add("User-Agent", constant.UA)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		zapx.Error("send check signed failed", zap.Error(err))
+		return false, err
+	}
+
+	result := new(struct {
+		Result  int    `json:"result"`
+		Message string `json:"msg"`
+		Data    struct {
+			Status int `json:"status"`
+		} `json:"data"`
+	})
+	if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		zapx.Error("unmarshal check signed response failed", zap.Error(err))
+		return false, err
+	}
+
+	return result.Data.Status == 0, nil
+}
+
+func (c *ChaoXingCourse) generalSign(ctx context.Context, activeID int64) error {
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, fmt.Sprintf(`https://mobilelearn.chaoxing.com/v2/apis/sign/signIn?activeId=%d`, activeID), nil)
+	if err != nil {
+		zapx.Error("generate generalSign request failed", zap.Error(err))
+		return err
+	}
+	c.user.SetCredentials(req)
+	req.Header.Add("User-Agent", constant.UA)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		zapx.Error("general sign failed", zap.Error(err))
+		return nil
+	}
+
+	result := new(struct {
+		Result  int    `json:"result"`
+		Message string `json:"msg"`
+		Data    struct {
+			ID         int64  `json:"id"`
+			Name       string `json:"name"`
+			SubmitTime string `json:"submittime"`
+		} `json:"data"`
+	})
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		zapx.Error("decode general sign in response failed", zap.Error(err))
+		return err
+	}
+
+	if result.Result != 1 {
+		return errors.New("general sign not success: " + result.Message)
+	}
+
+	return nil
+}
+
+func (c *ChaoXingCourse) locationSign(ctx context.Context, addr string, activeID int64, longitude, latitude float64) error {
+	req, _ := http.NewRequestWithContext(
+		ctx, http.MethodGet, fmt.Sprintf(`https://mobilelearn.chaoxing.com/pptSign/stuSignajax?name=&address=%s&activeId=%d&uid=%s&clientip=&latitude=%v&longitude=%v&fid=1731&appType=15&ifTiJiao=1`, url.QueryEscape(addr), activeID, c.user.GetUID(), latitude, longitude), nil)
+	c.user.SetCredentials(req)
+	req.Header.Add("User-Agent", constant.UA)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		zapx.Error("send location sign in request failed", zap.Error(err))
+		return err
+	}
+
+	bs, err := io.ReadAll(resp.Body)
+	if err != nil {
+		zapx.Error("read location sign response body failed", zap.Error(err))
+		return err
+	}
+
+	if string(bs) != "success" {
+		zapx.Error("location sign failed", zap.Error(err))
+		return err
+	}
+
+	return nil
+}
+
+/*******************
+*    QrCode sign   *
+********************/
 
 func (c *ChaoXingCourse) UpdateQrCodeEnc(updateAt time.Time, enc string) {
 	c.mux.Lock()
@@ -101,161 +278,26 @@ func (c *ChaoXingCourse) getQrCode() (string, time.Time) {
 	return enc, updatedAt
 }
 
-func (c *ChaoXingCourse) StartAutoSign() <-chan SignStatus {
-	ch := make(chan SignStatus, len(c.users))
-	go func() {
-		for {
-			alist, err := getActiveList(context.Background(), c.users[len(c.users)-1].GetCookie(), c.courseID, c.classID)
-			if err != nil && len(alist.Data.ActiveList) == 0 {
-				time.Sleep(c.interval)
-				continue
-			}
-			// TODO(sign): now just sign the latest one. It can be used for all
-			sign := alist.Data.ActiveList[0]
-			if time.Now().UnixMilli() < sign.EndTime && sign.AttendNum == 0 {
-				// !delay to avoid sign too quickly
-				time.Sleep(c.delay)
-				// Sign for all users
-				for _, u := range c.users {
-					var err error
-					switch sign.SignName {
-					case GeneralSign:
-						_, err = generalSign(context.Background(), u.GetCookie(), sign.ActiveID)
-					case LocationSign:
-						_, err = locationSign(context.Background(), u.GetCookie(), u.GetUID(), c.location.Addr, sign.ActiveID, c.location.Longitude, c.location.Latitude)
-					case QrCodeSign:
-						enc, updatedAt := c.getQrCode()
-						if updatedAt.UnixMilli() < sign.StartTime {
-							break
-						}
-						_, err = qrCodeSign(context.Background(), u.GetCookie(), enc, sign.ActiveID)
-					default:
-						err = errors.New("sign type is not supported: " + sign.SignName)
-					}
-
-					if err == nil {
-						ch <- SignStatus{Success: true, CourseName: c.courseName, Message: "success", User: u}
-					} else {
-						ch <- SignStatus{Success: false, CourseName: c.courseName, Message: err.Error(), User: u}
-					}
-				}
-			}
-
-			time.Sleep(c.interval)
-		}
-	}()
-	return ch
-}
-
-// for each single course, the activeList for every students is same. Therefore, use the random ones.
-func getActiveList(ctx context.Context, cookie string, courseID, classID int64) (*ActiveList, error) {
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodGet, fmt.Sprintf(`https://mobilelearn.chaoxing.com/v2/apis/active/student/activelist?fid=0&courseId=%d&classId=%d&_=%d`, courseID, classID, time.Now().UnixMilli()),
-		nil,
-	)
-	if err != nil {
-		zapx.Error("generate get activeList request failed", zap.Error(err))
-		return nil, err
-	}
-	req.Header.Add("Cookie", cookie)
-	req.Header.Add("User-Agent", constant.UA)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		zapx.Error("get activeList failed", zap.Error(err))
-		return nil, err
-	}
-
-	alist := new(ActiveList)
-	if err := json.NewDecoder(resp.Body).Decode(alist); err != nil {
-		zapx.Error("decode activeList failed", zap.Error(err))
-		return nil, err
-	}
-
-	return alist, nil
-}
-
-func generalSign(ctx context.Context, cookie string, activeID int64) (time.Time, error) {
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodGet, fmt.Sprintf(`https://mobilelearn.chaoxing.com/v2/apis/sign/signIn?activeId=%d`, activeID), nil)
-	if err != nil {
-		zapx.Error("generate generalSign request failed", zap.Error(err))
-		return time.Now(), err
-	}
-	req.Header.Add("Cookie", cookie)
-	req.Header.Add("User-Agent", constant.UA)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		zapx.Error("general sign failed", zap.Error(err))
-		return time.Now(), nil
-	}
-
-	result := new(struct {
-		Result  int    `json:"result"`
-		Message string `json:"msg"`
-		Data    struct {
-			ID         int64  `json:"id"`
-			Name       string `json:"name"`
-			SubmitTime string `json:"submittime"`
-		} `json:"data"`
-	})
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		zapx.Error("decode general sign in response failed", zap.Error(err))
-		return time.Now(), err
-	}
-
-	if result.Result != 1 {
-		return time.Now(), errors.New("general sign not success: " + result.Message)
-	}
-
-	// TODO: using data.submitTime
-	return time.Now(), nil
-}
-
-func locationSign(ctx context.Context, cookie, userID, addr string, activeID int64, longitude, latitude float64) (time.Time, error) {
-	req, _ := http.NewRequestWithContext(
-		ctx, http.MethodGet, fmt.Sprintf(`https://mobilelearn.chaoxing.com/pptSign/stuSignajax?name=&address=%s&activeId=%d&uid=%s&clientip=&latitude=%v&longitude=%v&fid=1731&appType=15&ifTiJiao=1`, url.QueryEscape(addr), activeID, userID, latitude, longitude), nil)
-	req.Header.Add("Cookie", cookie)
-	req.Header.Add("User-Agent", constant.UA)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		zapx.Error("send location sign in request failed", zap.Error(err))
-		return time.Time{}, err
-	}
-
-	bs, err := io.ReadAll(resp.Body)
-	if err != nil {
-		zapx.Error("read location sign response body failed", zap.Error(err))
-		return time.Time{}, err
-	}
-
-	if string(bs) != "success" {
-		zapx.Error("location sign failed", zap.Error(err))
-		return time.Time{}, err
-	}
-
-	return time.Now(), nil
-}
-
-func qrCodeSign(ctx context.Context, cookie, enc string, activeID int64) (time.Time, error) {
+func (c *ChaoXingCourse) qrCodeSign(ctx context.Context, enc string, activeID int64) error {
 	req, _ := http.NewRequestWithContext(
 		ctx, http.MethodGet, fmt.Sprintf(`https://mobilelearn.chaoxing.com/pptSign/stuSignajax?enc=%s&name=&activeId=%d&uid=122949003&clientip=&useragent=&latitude=-1&longitude=-1&fid=1731&appType=15`, enc, activeID), nil)
-	req.Header.Add("Cookie", cookie)
+	c.user.SetCredentials(req)
 	req.Header.Add("User-Agent", constant.UA)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		zapx.Error("send qrCode sign in failed", zap.Error(err))
-		return time.Time{}, err
+		return err
 	}
 	bs, err := io.ReadAll(resp.Body)
 	if err != nil {
 		zapx.Error("read qrCode sign response failed", zap.Error(err))
-		return time.Time{}, err
+		return err
 	}
 
 	if string(bs) != "success" {
 		zapx.Error("qrCode sign failed", zap.Error(err))
-		return time.Time{}, err
+		return err
 	}
 
-	return time.Now(), nil
+	return nil
 }
