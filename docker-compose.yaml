@@ -1,0 +1,12 @@
+version: '3.9'
+
+services:
+  icc-core:
+    image: xylonx/icc-core:v0.1.0
+    container_name: sign-fxxker
+    volumes:
+      - ${PWD}/config.yaml:/opt/sign-fxxker/config.yaml
+    environment:
+      - GIN_MODE=release
+    ports:
+      - 5000:5000
