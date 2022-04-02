@@ -1,5 +1,7 @@
 # sign-fxxker
 
+![docker](https://github.com/xylonx/sign-fxxker/actions/workflows/ci.yml/badge.svg)
+
 a sign fxxker for chaoxing sign
 
 support auto-sign type:

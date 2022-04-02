@@ -1,8 +1,8 @@
 version: '3.9'
 
 services:
-  icc-core:
-    image: xylonx/icc-core:v0.1.0
+  sign-fxxker:
+    image: xylonx/sign-fxxker:v0.1.0
     container_name: sign-fxxker
     volumes:
       - ${PWD}/config.yaml:/opt/sign-fxxker/config.yaml

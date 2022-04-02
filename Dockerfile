@@ -7,7 +7,7 @@ COPY . .
 
 RUN GOOS=linux GOARCH=amd64 go build -o main -ldflags="-w -s" main.go
 
-FROM scratch as Prod
+FROM xylonx/cn-ubuntu:latest as Prod
 
 ARG PROJECT_NAME=sign-fxxker
 
