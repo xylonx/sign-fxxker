@@ -1,3 +1,11 @@
+http:
+  host: 0.0.0.0
+  port: 5000
+  read_timeout_seconds: 10
+  write_timeout_seconds: 10
+  allow_origins:
+    - http://localhost:3000
+
 users:
   chaoxing:
     - alias: xylonx-chaoxing
